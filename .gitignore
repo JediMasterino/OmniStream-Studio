@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.bak
+
+# PyInstaller build outputs & distribution archives
+# (Upload compiled .exe and .zip bundles to GitHub Releases instead)
+build/
+dist/
+*.spec
+
+# Binaries and archives
+*.exe
+*.zip
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE configs & logs
+.idea/
+.vscode/
+*.log
