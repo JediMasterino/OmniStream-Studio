@@ -24,3 +24,8 @@ env/
 .vscode/
 *.log
 
+# Authentication & Session Files
+*cookie*.txt
+*.cookies
+
+

@@ -74,20 +74,38 @@ FFMPEG_LOCATION = _setup_binary_environment()
 
 
 def get_ytdlp_executable():
-    """Returns the absolute path to the local or system yt-dlp binary."""
-    candidates = [
-        os.path.join(_exe_dir, "yt-dlp.exe"),
-        os.path.join(_scripts_dir, "yt-dlp.exe"),
+    """Returns the absolute path to the local or system yt-dlp binary (prioritizes standalone binaries)."""
+    # 1. Search PATH for a standalone release binary (e.g. WinGet, Scoop, or manual install)
+    raw_path = os.environ.get("PATH", "")
+    found_binaries = []
+    for folder in raw_path.split(os.pathsep):
+        if not folder or not os.path.isdir(folder):
+            continue
+        candidate = os.path.join(folder, "yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
+        if os.path.isfile(candidate) and candidate not in found_binaries:
+            found_binaries.append(candidate)
+
+    # Prioritize standalone release binaries (outside Python virtual environments/Scripts)
+    standalone = [
+        b for b in found_binaries
+        if "scripts" not in b.lower() and "site-packages" not in b.lower() and ".venv" not in b.lower()
+    ]
+    if standalone:
+        return standalone[0]
+
+    # 2. Local bundled binary in application directory or next to script
+    local_candidates = [
         os.path.join(_app_dir, "yt-dlp.exe"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "yt-dlp.exe"),
+        os.path.join(_exe_dir, "yt-dlp.exe"),
     ]
-    for path in candidates:
-        if os.path.isfile(path):
+    for path in local_candidates:
+        if os.path.isfile(path) and "scripts" not in path.lower() and ".venv" not in path.lower():
             return path
 
-    p_path = shutil.which("yt-dlp")
-    if p_path:
-        return p_path
+    # 3. Fallback to venv / scripts if nothing else is available
+    if found_binaries:
+        return found_binaries[0]
 
     return "yt-dlp"
 
@@ -792,24 +810,45 @@ class MetadataFetcherThread(QThread):
                 return
 
             stdout = (stdout_raw or "").strip()
-            if not stdout:
-                err = (stderr_raw or "").strip() or f"yt-dlp exited with code {returncode}"
-                err_line = err.split('\n')[-1]
-                final_err = (
-                    err_line.split("ERROR:", 1)[-1].strip()
-                    if "ERROR:" in err_line
-                    else f"yt-dlp error: {err_line[:180]}"
-                )
-                self.metadata_signal.error_occurred.emit(self.request_id, final_err)
+            stderr = (stderr_raw or "").strip()
+
+            video_info = None
+            if stdout and stdout != "null":
+                try:
+                    parsed = json.loads(stdout)
+                    if isinstance(parsed, dict) and parsed:
+                        video_info = parsed
+                except Exception:
+                    video_info = None
+
+            # If no valid dictionary metadata was parsed (or yt-dlp errored out with empty/null output)
+            if video_info is None or not isinstance(video_info, dict):
+                err_text = ""
+                if stderr:
+                    error_lines = []
+                    for line in stderr.splitlines():
+                        line_s = line.strip()
+                        if "ERROR:" in line_s:
+                            clean_line = line_s.split("ERROR:", 1)[-1].strip()
+                            if clean_line:
+                                error_lines.append(clean_line)
+                    if error_lines:
+                        err_text = " | ".join(error_lines[:2])
+                    else:
+                        err_text = stderr.splitlines()[-1].strip()
+
+                if not err_text:
+                    if returncode != 0:
+                        err_text = f"yt-dlp exited with error code {returncode}"
+                    else:
+                        err_text = "No stream metadata found for this URL"
+
+                if not self._aborted:
+                    self.metadata_signal.error_occurred.emit(self.request_id, err_text)
                 return
 
-            try:
-                video_info = json.loads(stdout)
-                if not self._aborted:
-                    self.metadata_signal.metadata_ready.emit(self.request_id, video_info)
-            except Exception as e:
-                if not self._aborted:
-                    self.metadata_signal.error_occurred.emit(self.request_id, f"Error parsing metadata: {e}")
+            if not self._aborted:
+                self.metadata_signal.metadata_ready.emit(self.request_id, video_info)
         except FileNotFoundError:
             if not self._aborted:
                 self.metadata_signal.error_occurred.emit(self.request_id, "yt-dlp executable not found in PATH.")
@@ -1179,9 +1218,9 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(url_card)
 
         # ----------------- 3. AUTHENTICATION & COOKIES CARD -----------------
-        cookie_card = QFrame()
-        cookie_card.setObjectName("surfaceCard")
-        cookie_layout = QVBoxLayout(cookie_card)
+        self.cookie_card = QFrame()
+        self.cookie_card.setObjectName("surfaceCard")
+        cookie_layout = QVBoxLayout(self.cookie_card)
         cookie_layout.setContentsMargins(12, 9, 12, 9)
         cookie_layout.setSpacing(6)
 
@@ -1230,7 +1269,7 @@ class MainWindow(QMainWindow):
         self.cookie_hint_label.setWordWrap(True)
         cookie_layout.addWidget(self.cookie_hint_label)
 
-        content_layout.addWidget(cookie_card)
+        content_layout.addWidget(self.cookie_card)
 
         # ----------------- 4. RICH MEDIA PREVIEW CARD -----------------
         self.media_card = QFrame()
@@ -1636,6 +1675,15 @@ class MainWindow(QMainWindow):
             self.cookie_source_combo.setCurrentIndex(cookie_idx)
 
         cookie_file = self.settings.value("cookie_file_path", "", type=str)
+        if not cookie_file or not os.path.isfile(cookie_file):
+            local_cookie = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            if os.path.isfile(local_cookie):
+                cookie_file = local_cookie
+                if cookie_idx == 0:
+                    idx = self.cookie_source_combo.findText("Custom File (cookies.txt)")
+                    if idx >= 0:
+                        self.cookie_source_combo.setCurrentIndex(idx)
+
         if cookie_file:
             self.cookie_file_input.setText(cookie_file)
             self.cookie_file_input.setToolTip(cookie_file)
@@ -2534,7 +2582,7 @@ class MainWindow(QMainWindow):
             self.thumbnail_label.setText("🎬")
 
     def on_metadata_error(self, request_id: int, error_message: str):
-        """Handles errors during metadata fetch."""
+        """Handles errors during metadata fetch with clear visual indicators and actionable recovery steps."""
         if request_id != self._active_request_id:
             return
 
@@ -2542,22 +2590,37 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.update_log(f"Metadata Error: {error_message}\n")
 
+        self.reset_metadata_ui(keep_status=True)
+        self.set_ui_loading_state(False)
+
         low_err = error_message.lower()
         if "could not copy chrome cookie" in low_err or "permission denied" in low_err or "dpapi" in low_err:
             self.status_label.setText("Browser Cookie DB Locked")
+            self.set_status_pill("● Cookie Locked", "#F59E0B", "#2A2012")
+            self.video_title_label.setText("Browser Cookie Database Locked")
+            self.channel_badge.setText("Close Chrome/Edge briefly or switch to Firefox / cookies.txt")
             self.update_log(
-                "Tip: Chromium browsers lock cookies while running on Windows. Close the browser briefly, "
-                "switch to Mozilla Firefox, or export a cookies.txt file.\n"
+                "💡 Tip: Chromium browsers lock their cookie database while open on Windows.\n"
+                "   Close Chrome/Edge briefly, switch to Mozilla Firefox, or export a cookies.txt file.\n"
             )
-        elif "login" in low_err or "authentication" in low_err or "private" in low_err or "sign in" in low_err:
-            self.status_label.setText("Login/Cookies Required")
-            self.update_log("Tip: Select your browser in 'Authentication & Cookies' above where you are logged in.\n")
+        elif any(k in low_err for k in ("bot", "sign in", "login", "authentication", "private", "cookies", "confirm you")):
+            self.status_label.setText("Sign In / Cookies Required")
+            self.set_status_pill("● Auth Required", "#F59E0B", "#2A2012")
+            self.video_title_label.setText("YouTube Sign-in / Bot Verification Required")
+            self.channel_badge.setText("Select your browser session in 'Authentication & Cookies' above")
+            self.update_log(
+                "💡 YouTube Bot / Sign-In Check: YouTube requires session verification for this stream.\n"
+                "   👉 In '🍪 AUTHENTICATION & COOKIES' above, select your browser (e.g. Chrome, Edge, Firefox) "
+                "or choose a cookies.txt file, then fetch again.\n"
+            )
+            if hasattr(self, "cookie_source_combo"):
+                self.cookie_source_combo.setFocus()
         else:
             self.status_label.setText("Error loading metadata")
+            self.set_status_pill("● Fetch Error", "#EF4444", "#2A1818")
+            self.video_title_label.setText("Unable to load stream details")
+            self.channel_badge.setText(error_message[:95] if error_message else "Check activity log for details")
 
-        self.set_status_pill("● Fetch Error", "#EF4444", "#2A1818")
-        self.reset_metadata_ui(keep_status=True)
-        self.set_ui_loading_state(False)
         if "not found in PATH" in error_message:
             QMessageBox.critical(self, "yt-dlp Missing", error_message)
 
