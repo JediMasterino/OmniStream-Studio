@@ -1,0 +1,13 @@
+# Normalize line endings in the repository and prevent CRLF conversion warnings
+* text=auto eol=lf
+
+# Windows batch scripts require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.ico binary
+*.exe binary
+*.zip binary
+
