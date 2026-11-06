@@ -7,7 +7,7 @@ import re
 import os
 import shutil
 import ssl
-from urllib.request import urlopen, URLError
+from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
 from socket import timeout as TimeoutError
 
@@ -16,10 +16,12 @@ from PyQt5.QtWidgets import (
     QLineEdit, QPushButton, QTextEdit, QLabel, QComboBox, QSizePolicy,
     QFileDialog, QProgressBar, QMessageBox, QDesktopWidget, QFrame, QScrollArea
 )
-from PyQt5.QtCore import pyqtSignal, QObject, Qt, QThread, QTimer, QRectF, QUrl
+from PyQt5.QtCore import (
+    pyqtSignal, QObject, Qt, QThread, QTimer, QRectF, QUrl, QPointF
+)
 from PyQt5.QtGui import (
     QPixmap, QFont, QColor, QImage, QPainter, QPainterPath,
-    QDesktopServices, QCursor
+    QDesktopServices, QCursor, QPen
 )
 
 # --- Constants ---
@@ -405,29 +407,29 @@ class EngineUpdateThread(QThread):
 
 def ensure_arrow_icons():
     """Generates crisp modern antialiased vector chevron icons in the app directory."""
-    import sys
     if getattr(sys, "frozen", False):
         base_dir = os.path.dirname(sys.executable)
     else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
     normal_icon = os.path.join(base_dir, "chevron_down.png").replace("\\", "/")
     hover_icon = os.path.join(base_dir, "chevron_down_hover.png").replace("\\", "/")
 
     if not (os.path.exists(normal_icon) and os.path.exists(hover_icon)):
-        from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor
-        from PyQt5.QtCore import Qt, QPointF
-        for p, color_str, width in [(normal_icon, "#94A3B8", 2.2), (hover_icon, "#00DFD8", 2.5)]:
-            pix = QPixmap(24, 24)
-            pix.fill(Qt.transparent)
-            painter = QPainter(pix)
-            painter.setRenderHint(QPainter.Antialiasing)
-            pen = QPen(QColor(color_str), width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.drawLine(QPointF(6, 9), QPointF(12, 15))
-            painter.drawLine(QPointF(12, 15), QPointF(18, 9))
-            painter.end()
-            pix.save(p, "PNG")
+        try:
+            for icon_path, color_str, width in [(normal_icon, "#94A3B8", 2.2), (hover_icon, "#00DFD8", 2.5)]:
+                pix = QPixmap(24, 24)
+                pix.fill(Qt.transparent)
+                painter = QPainter(pix)
+                painter.setRenderHint(QPainter.Antialiasing)
+                pen = QPen(QColor(color_str), width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.drawLine(QPointF(6, 9), QPointF(12, 15))
+                painter.drawLine(QPointF(12, 15), QPointF(18, 9))
+                painter.end()
+                pix.save(icon_path, "PNG")
+        except Exception:
+            pass
 
     return normal_icon, hover_icon
 
@@ -1285,7 +1287,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(css)
 
     # --- Cookie Management ---
-    def on_cookie_source_changed(self):
+    def on_cookie_source_changed(self, index=None):
         """Updates cookie controls and helper hint based on selected source."""
         source = self.cookie_source_combo.currentText()
         is_custom_file = "Custom File" in source
@@ -1475,11 +1477,12 @@ class MainWindow(QMainWindow):
 
         if is_playlist:
             raw_entries = self.video_info.get('entries', [])
+            entries = [e for e in raw_entries if e]
             playlist_count = self.video_info.get('playlist_count')
-            if playlist_count and playlist_count > len(raw_entries):
+            if playlist_count and playlist_count > len(entries):
                 count = playlist_count
             else:
-                count = len(raw_entries) if raw_entries else (playlist_count or 0)
+                count = len(entries) if entries else (playlist_count or 0)
             count_str = f"{count:,}"
             raw_title = self.video_info.get("title") or f"Mix / Playlist ({count_str} Videos)"
             clean_title = raw_title.strip()
@@ -1778,7 +1781,15 @@ class MainWindow(QMainWindow):
         self.hud_speed_size.setText("⚡ Initializing stream...")
         self.hud_eta_percent.setText("0%")
 
-        self.update_log(f"--- Starting Download ---\\nTitle: {self.video_info.get('title')}\\nQuality: {quality}\\nFormat: {filetype}\\nFolder: {self.output_dir}\\nCookies: {' '.join(cookie_args) if cookie_args else 'None'}\\n")
+        cookie_display = ' '.join(cookie_args) if cookie_args else 'None'
+        self.update_log(
+            f"--- Starting Download ---\n"
+            f"Title: {self.video_info.get('title')}\n"
+            f"Quality: {quality}\n"
+            f"Format: {filetype}\n"
+            f"Folder: {self.output_dir}\n"
+            f"Cookies: {cookie_display}\n"
+        )
 
         is_playlist = False
         playlist_end = None
@@ -1834,7 +1845,7 @@ class MainWindow(QMainWindow):
     def on_download_complete(self, success: bool, message: str):
         """Handles post-download UI updates."""
         self.set_ui_downloading_state(False)
-        self.update_log(f"Result: {message}\\n")
+        self.update_log(f"Result: {message}\n")
 
         if success:
             self.progress_bar.setValue(100)
