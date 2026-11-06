@@ -1,6 +1,5 @@
 # OmniStream Studio 🎬
 
-**Created by Angelo Golloberda**
 
 OmniStream Studio is a sleek, modern desktop media downloader built with **Python**, **PyQt5**, and **yt-dlp**. It provides a studio-grade dark interface for downloading high-resolution videos, audio tracks, YouTube Mixes, and full playlists with real-time HUD metrics.
 
